@@ -138,6 +138,16 @@ std::optional<LRESULT> WindowManagerPlugin::HandleWindowProc(HWND hWnd,
                                                              LPARAM lParam) {
   std::optional<LRESULT> result = std::nullopt;
 
+  // Only the window this plugin manages; other top-level windows of the
+  // engine (Flutter multi-window, HostWindow) are left untouched.
+  HWND own = window_manager->native_window;
+  if (own == nullptr && registrar->GetView() != nullptr) {
+    own = ::GetAncestor(registrar->GetView()->GetNativeWindow(), GA_ROOT);
+  }
+  if (hWnd != own) {
+    return result;
+  }
+
   if (message == WM_DPICHANGED) {
     window_manager->pixel_ratio_ =
         (float)LOWORD(wParam) / USER_DEFAULT_SCREEN_DPI;
