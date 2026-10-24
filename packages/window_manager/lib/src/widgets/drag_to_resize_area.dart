@@ -75,9 +75,11 @@ class DragToResizeArea extends StatelessWidget {
         Positioned(
           child: Container(
             margin: resizeEdgeMargin,
+            // Edges follow the screen, not an inherited RTL Directionality.
             child: Column(
               children: [
                 Row(
+                  textDirection: TextDirection.ltr,
                   children: [
                     _buildDragToResizeEdge(
                       ResizeEdge.topLeft,
@@ -104,6 +106,7 @@ class DragToResizeArea extends StatelessWidget {
                 Expanded(
                   flex: 1,
                   child: Row(
+                    textDirection: TextDirection.ltr,
                     children: [
                       _buildDragToResizeEdge(
                         ResizeEdge.left,
@@ -125,6 +128,7 @@ class DragToResizeArea extends StatelessWidget {
                   ),
                 ),
                 Row(
+                  textDirection: TextDirection.ltr,
                   children: [
                     _buildDragToResizeEdge(
                       ResizeEdge.bottomLeft,
