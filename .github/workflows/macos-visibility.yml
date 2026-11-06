@@ -1,0 +1,72 @@
+name: macOS visibility events
+
+on:
+  pull_request:
+    branches: ['otzaria/0.5.2-hwnd-filter']
+    paths:
+      - '.github/workflows/macos-visibility.yml'
+      - 'packages/window_manager/macos/**'
+      - 'packages/window_manager/lib/**'
+      - 'packages/window_manager/test/window_visibility_event_test.dart'
+      - 'packages/window_manager/pubspec.yaml'
+      - 'tool/macos_visibility/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-visibility-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+      - name: Validate native report and process controls
+        run: python3 -m unittest discover -s tool/macos_visibility -p test_runner.py -v
+      - name: Validate the existing generic event channel
+        working-directory: packages/window_manager
+        run: |
+          flutter pub get --no-example
+          flutter pub get --no-example --enforce-lockfile
+          flutter analyze --no-pub --fatal-infos lib test
+          flutter test --no-pub --concurrency=1 test/window_visibility_event_test.dart
+
+  native:
+    name: Native AppKit transitions and matched old-source controls
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+      - name: Prepare the official Flutter macOS framework
+        run: flutter precache --macos
+      - name: Run the complete native source against real windows
+        run: >-
+          python3 tool/macos_visibility/run.py
+          --flutter-root "$FLUTTER_ROOT"
+          --output "$RUNNER_TEMP/macos-visibility"
+      - name: Preserve native events, compiler logs and failures
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: macos-window-visibility
+          path: |
+            ${{ runner.temp }}/macos-visibility/**/*.json
+            ${{ runner.temp }}/macos-visibility/**/*.log
+            ${{ runner.temp }}/macos-visibility/baseline/WindowManager.swift
+          if-no-files-found: warn

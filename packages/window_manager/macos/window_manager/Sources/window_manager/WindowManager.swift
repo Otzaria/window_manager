@@ -132,16 +132,24 @@ public class WindowManager: NSObject, NSWindowDelegate {
     }
     
     public func show() {
-        mainWindow.setIsVisible(true)
         DispatchQueue.main.async {
+            let wasVisible = self.mainWindow.isVisible
+            self.mainWindow.setIsVisible(true)
             self.mainWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            if (!wasVisible && self.mainWindow.isVisible) {
+                self._emitEvent("show")
+            }
         }
     }
     
     public func hide() {
         DispatchQueue.main.async {
+            let wasVisible = self.mainWindow.isVisible
             self.mainWindow.orderOut(nil)
+            if (wasVisible && !self.mainWindow.isVisible) {
+                self._emitEvent("hide")
+            }
         }
     }
     
