@@ -7,6 +7,7 @@ import platform
 import plistlib
 import signal
 import subprocess
+import sys
 import time
 
 
@@ -14,6 +15,70 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = Path("packages/window_manager/macos/window_manager/Sources/window_manager/WindowManager.swift")
 BASELINE = "4f37655288ce8b803a9bd50294c5d6983850f622"
 CASES = ("show", "hide", "rapid", "noop", "refusal", "independent", "focus-minimize", "panel")
+
+
+class NativeCaseFailure(ValueError):
+    def __init__(self, result):
+        self.result = result
+        self.diagnosticErrors = result.setdefault("diagnosticErrors", [])
+        super().__init__(
+            f"Native case {result['case']} failed "
+            f"(command={result.get('commandStatus')}, exit={result.get('exitCode')}): "
+            f"{result['error']}")
+
+
+class CommandFailure(RuntimeError):
+    def __init__(self, message, receipt):
+        self.commandReceipt = receipt
+        self.diagnosticErrors = list(receipt.get("diagnosticErrors", []))
+        super().__init__(f"{message} (command={receipt.get('status')}, exit={receipt.get('exitCode')})")
+
+
+def describe_error(error):
+    return f"{type(error).__name__}: {error}"
+
+
+def record_diagnostic_error(errors, stage, operation, path, error):
+    errors.append({"stage": stage, "operation": operation, "path": str(path),
+                   "type": type(error).__name__, "message": str(error)})
+
+
+def save_json(path, value, errors, stage):
+    """Return a persistence error without discarding the caller's in-memory result."""
+    operation = "serialize"
+    try:
+        text = json.dumps(value, indent=2) + "\n"
+        operation = "write"
+        path.write_text(text)
+    except Exception as error:
+        record_diagnostic_error(errors, stage, operation, path, error)
+        return error
+    return None
+
+
+def require_command_diagnostics(receipt):
+    if receipt.get("diagnosticErrors"):
+        raise CommandFailure("Command diagnostics could not be retained", receipt)
+
+
+def require_successful_command(receipt, message):
+    if receipt.get("status") != "completed" or receipt.get("exitCode") != 0:
+        raise CommandFailure(message, receipt)
+    require_command_diagnostics(receipt)
+
+
+def note_diagnostic_errors(error, errors):
+    # The exception and its attached results remain usable even if stderr fails.
+    for item in errors:
+        message = (f"Secondary diagnostic failure at {item['stage']} ({item['operation']}): "
+                   f"{item['type']}: {item['message']}; path={item['path']}")
+        try:
+            if hasattr(error, "add_note"):
+                error.add_note(message)
+            else:
+                print(message, file=sys.stderr)
+        except Exception:
+            pass
 
 
 def digest(path):
@@ -48,12 +113,15 @@ def execute(command, output, label, timeout):
     stdout = output / f"{label}.stdout.log"
     stderr = output / f"{label}.stderr.log"
     started = time.monotonic()
-    receipt = {"command": command, "timeoutSeconds": timeout, "status": "running"}
+    receipt = {"command": command, "timeoutSeconds": timeout, "status": "running",
+               "exitCode": None, "started": False, "diagnosticErrors": []}
     process = None
+    primary_error = None
     try:
         with stdout.open("wb") as out, stderr.open("wb") as err:
             process = subprocess.Popen(command, stdout=out, stderr=err,
                                        stdin=subprocess.DEVNULL, start_new_session=True)
+            receipt["started"] = True
             receipt["pid"] = process.pid
             try:
                 code = process.wait(timeout=timeout)
@@ -64,9 +132,10 @@ def execute(command, output, label, timeout):
             receipt["exitCode"] = code
     except BaseException as error:
         receipt["status"] = "failed"
-        receipt["error"] = f"{type(error).__name__}: {error}"
-        raise
+        receipt["error"] = describe_error(error)
+        primary_error = error
     finally:
+        receipt["cleanupAttempted"] = process is not None
         if process is not None:
             try:
                 receipt["groupDrained"] = drain_group(process)
@@ -77,10 +146,43 @@ def execute(command, output, label, timeout):
             if not receipt["groupDrained"]:
                 receipt["status"] = "cleanupFailed"
         receipt["elapsedMs"] = (time.monotonic() - started) * 1000
-        receipt["stdoutSha256"] = digest(stdout) if stdout.exists() else None
-        receipt["stderrSha256"] = digest(stderr) if stderr.exists() else None
-        (output / f"{label}.command.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        for stream_name, path in (("stdout", stdout), ("stderr", stderr)):
+            receipt[f"{stream_name}Sha256"] = None
+            try:
+                receipt[f"{stream_name}Sha256"] = digest(path) if path.exists() else None
+            except Exception as error:
+                record_diagnostic_error(receipt["diagnosticErrors"], "commandReceipt", "hash", path, error)
+        save_json(output / f"{label}.command.json", receipt,
+                  receipt["diagnosticErrors"], "commandReceipt")
+    if primary_error is not None:
+        primary_error.commandReceipt = receipt
+        primary_error.diagnosticErrors = list(receipt["diagnosticErrors"])
+        raise primary_error
     return receipt
+
+
+def validate_startup(report):
+    startup = report.get("startup")
+    if not isinstance(startup, dict) or startup.get("ready") is not True:
+        raise ValueError("Native startup readiness is missing")
+    if type(startup.get("requestedActivationPolicy")) is not int or startup["requestedActivationPolicy"] != 0:
+        raise ValueError("Native startup did not request regular activation policy")
+    if type(startup.get("setActivationPolicyReturned")) is not bool:
+        raise ValueError("Native policy-switch result was not recorded")
+    before = startup.get("beforePolicy")
+    if not isinstance(before, dict) or type(before.get("activationPolicy")) is not int or before["activationPolicy"] not in (0, 1, 2):
+        raise ValueError("Native policy before the switch was not recorded")
+    if startup.get("didFinishLaunchingObserved") is not True:
+        raise ValueError("Native startup did not observe finished launch")
+    for phase in ("afterPolicy", "afterFinishLaunching", "beforeCase"):
+        state = startup.get(phase)
+        if not isinstance(state, dict) or type(state.get("activationPolicy")) is not int or state["activationPolicy"] != 0:
+            raise ValueError(f"Native startup was not regular at {phase}")
+    ready = startup["beforeCase"]
+    if ready.get("mainEventLoopRunning") is not True or ready.get("mainThread") is not True:
+        raise ValueError("Native case did not start in the main event loop")
+    if type(ready.get("screens")) is not int or ready["screens"] < 1:
+        raise ValueError("Native case had no screen")
 
 
 def validate_report(receipt, report, case, negative=False):
@@ -92,8 +194,11 @@ def validate_report(receipt, report, case, negative=False):
         raise ValueError("Native report identity does not match the requested case")
     if type(report.get("pid")) is not int or report["pid"] != receipt.get("pid"):
         raise ValueError("Native report PID does not match the owned process")
+    if report.get("nativeWindowExecution") is False and report.get("stage") == "startup" and report.get("status") == "failed":
+        raise ValueError(f"Native startup failed: {report.get('errorCode')}: {report.get('error')}")
     if report.get("nativeWindowExecution") is not True or report.get("performanceAcceptance") is not False:
         raise ValueError("Native report scope is missing or invalid")
+    validate_startup(report)
     events = report.get("events")
     if not isinstance(events, list) or not isinstance(report.get("completedStages"), list):
         raise ValueError("Native event or stage evidence is missing")
@@ -123,14 +228,67 @@ def validate_report(receipt, report, case, negative=False):
 
 def run_case(executable, output, case, negative=False):
     label = f"case-{case}"
-    receipt = execute([str(executable), case], output, label, 45)
     log = output / f"{label}.stdout.log"
-    if log.stat().st_size > 1024 * 1024:
-        raise ValueError("Native report exceeds its bound; raw output is retained")
-    report = json.loads(log.read_text())
-    verdict = validate_report(receipt, report, case, negative)
-    return {"case": case, "verdict": verdict, "exitCode": receipt["exitCode"],
-            "reportSha256": digest(log)}
+    result_path = output / f"{label}.result.json"
+    command_path = output / f"{label}.command.json"
+    result = {"case": case, "verdict": "failed", "negativeControl": negative,
+              "performanceAcceptance": False, "diagnosticErrors": []}
+    result_write_attempted = False
+    try:
+        receipt = execute([str(executable), case], output, label, 45)
+        result.update(commandStatus=receipt.get("status"), exitCode=receipt.get("exitCode"),
+                      commandReceipt=receipt, diagnosticErrors=list(receipt.get("diagnosticErrors", [])))
+        result["reportBytes"] = log.stat().st_size
+        if result["reportBytes"] > 1024 * 1024:
+            raise ValueError("Native report exceeds its bound; raw output is retained")
+        result["reportSha256"] = digest(log)
+        if result["reportBytes"] == 0:
+            raise ValueError("Native process produced no JSON report; raw output and command receipt are retained")
+        try:
+            report = json.loads(log.read_text())
+        except (UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError("Native process produced invalid JSON; raw output and command receipt are retained") from error
+        if isinstance(report, dict):
+            result.update(reportedStatus=report.get("status"), reportedStage=report.get("stage"),
+                          reportedErrorCode=report.get("errorCode"), reportedError=report.get("error"),
+                          reportedNativeWindowExecution=report.get("nativeWindowExecution"))
+        verdict = validate_report(receipt, report, case, negative)
+        # Inspect the native result before reporting errors, so an earlier native
+        # failure remains primary. An otherwise valid case still needs evidence.
+        require_command_diagnostics(receipt)
+        result["verdict"] = verdict
+        result_write_attempted = True
+        write_error = save_json(result_path, result, result["diagnosticErrors"], "caseResult")
+        if write_error is not None:
+            result["diagnosticWriteError"] = describe_error(write_error)
+            raise write_error
+        return result
+    except BaseException as error:
+        result.update(verdict="failed", error=describe_error(error))
+        # Ownership and the first process error never depend on a successful file
+        # write. execute() attaches its receipt to the original start exception.
+        receipt = getattr(error, "commandReceipt", None)
+        if "commandReceipt" not in result and isinstance(receipt, dict):
+            result.update(commandStatus=receipt.get("status"), exitCode=receipt.get("exitCode"),
+                          commandReceipt=receipt, diagnosticErrors=list(receipt.get("diagnosticErrors", [])))
+        if "commandReceipt" not in result:
+            try:
+                if command_path.exists():
+                    receipt = json.loads(command_path.read_text())
+                    result.update(commandStatus=receipt.get("status"), exitCode=receipt.get("exitCode"),
+                                  commandReceipt=receipt, diagnosticErrors=list(receipt.get("diagnosticErrors", [])))
+            except (OSError, UnicodeError, json.JSONDecodeError) as receipt_error:
+                result["receiptReadError"] = describe_error(receipt_error)
+                record_diagnostic_error(result["diagnosticErrors"], "commandReceipt", "read", command_path, receipt_error)
+        if not result_write_attempted:
+            write_error = save_json(result_path, result, result["diagnosticErrors"], "caseResult")
+            if write_error is not None:
+                result["diagnosticWriteError"] = describe_error(write_error)
+        if not isinstance(error, Exception):
+            error.result = result
+            error.diagnosticErrors = result["diagnosticErrors"]
+            raise
+        raise NativeCaseFailure(result) from error
 
 
 def compile_probe(source, output, framework):
@@ -148,8 +306,7 @@ def compile_probe(source, output, framework):
                "-Xlinker", "-rpath", "-Xlinker", str(framework.parent),
                str(source), str(harness), "-o", str(executable)]
     receipt = execute(command, output, "compile", 120)
-    if receipt.get("status") != "completed" or receipt.get("exitCode") != 0:
-        raise RuntimeError("Native compilation failed; compiler output is retained")
+    require_successful_command(receipt, "Native compilation failed")
     return executable
 
 
@@ -163,7 +320,10 @@ def main():
         raise ValueError("Use a new output directory to preserve previous evidence")
     output.mkdir(parents=True)
     summary = {"status": "running", "baseline": BASELINE, "platform": platform.platform(),
-               "nativeWindowExecution": False, "performanceAcceptance": False, "cases": {}}
+               "nativeWindowExecution": False, "performanceAcceptance": False, "cases": {},
+               "diagnosticErrors": []}
+    summary_path = output / "summary.json"
+    summary_write_failed = False
     try:
         if platform.system() != "Darwin":
             raise RuntimeError("Native AppKit controls require macOS")
@@ -179,8 +339,7 @@ def main():
         for label, command in (("swift-version", ["xcrun", "swiftc", "--version"]),
                                ("xcode-version", ["xcodebuild", "-version"])):
             receipt = execute(command, output, label, 30)
-            if receipt.get("status") != "completed" or receipt.get("exitCode") != 0:
-                raise RuntimeError("Could not record the native toolchain")
+            require_successful_command(receipt, "Could not record the native toolchain")
         summary["candidateSourceSha256"] = digest(ROOT / SOURCE)
         summary["harnessSha256"] = digest(ROOT / "tool/macos_visibility/main.swift")
         summary["commit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -200,15 +359,37 @@ def main():
                 result = run_case(executable, current, case,
                                   negative=variant == "baseline" and case in ("show", "hide"))
                 results.append(result)
-                (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+                write_error = save_json(summary_path, summary, summary["diagnosticErrors"], "summary")
+                if write_error is not None:
+                    summary_write_failed = True
+                    raise write_error
         summary["status"] = "passed"
         summary["nativeWindowExecution"] = True
-    except Exception as error:
+    except BaseException as error:
         summary["status"] = "failed"
-        summary["error"] = f"{type(error).__name__}: {error}"
+        summary["error"] = describe_error(error)
+        result = getattr(error, "result", None)
+        if isinstance(result, dict):
+            summary["failedCase"] = result
+            summary["diagnosticErrors"] = result.setdefault("diagnosticErrors", [])
+        elif hasattr(error, "commandReceipt"):
+            summary["failedCommand"] = error.commandReceipt
+            summary["diagnosticErrors"] = list(getattr(error, "diagnosticErrors", []))
+        error.summary = summary
+        error.diagnosticErrors = summary["diagnosticErrors"]
+        if not summary_write_failed:
+            save_json(summary_path, summary, summary["diagnosticErrors"], "summary")
+        note_diagnostic_errors(error, summary["diagnosticErrors"])
         raise
-    finally:
-        (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    else:
+        write_error = save_json(summary_path, summary, summary["diagnosticErrors"], "summary")
+        if write_error is not None:
+            summary["status"] = "failed"
+            summary["error"] = describe_error(write_error)
+            write_error.summary = summary
+            write_error.diagnosticErrors = summary["diagnosticErrors"]
+            note_diagnostic_errors(write_error, summary["diagnosticErrors"])
+            raise write_error
 
 
 if __name__ == "__main__":

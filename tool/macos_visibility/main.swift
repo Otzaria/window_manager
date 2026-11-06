@@ -40,6 +40,7 @@ final class RefusingWindow: NSWindow {
 
 final class VisibilityProbe {
     let caseName: String
+    let startup: [String: Any]
     let window: NSWindow
     let otherWindow: NSWindow
     let manager = WindowManager()
@@ -53,8 +54,9 @@ final class VisibilityProbe {
     var stepStarted = 0.0
     var finished = false
 
-    init(_ caseName: String) {
+    init(_ caseName: String, startup: [String: Any]) {
         self.caseName = caseName
+        self.startup = startup
         let frame = NSRect(x: 80, y: 80, width: 400, height: 260)
         let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable]
         if caseName == "panel" {
@@ -282,6 +284,7 @@ final class VisibilityProbe {
         finished = true
         var report: [String: Any] = [
             "schemaVersion": 1, "case": caseName,
+            "startup": startup,
             "status": failure == nil ? "passed" : "failed", "stage": stage,
             "completedStages": completed, "events": events,
             "target": state(window), "other": state(otherWindow),
@@ -309,17 +312,91 @@ final class VisibilityProbe {
     }
 }
 
-guard CommandLine.arguments.count == 2 else { exit(64) }
-let application = NSApplication.shared
-guard application.setActivationPolicy(.regular) else { exit(65) }
-application.finishLaunching()
-let probe = VisibilityProbe(CommandLine.arguments[1])
-do {
-    try probe.configure()
-    DispatchQueue.main.async { probe.advance() }
-    application.run()
-} catch let error as ProbeFailure {
-    probe.finish(error)
-} catch {
-    probe.finish(ProbeFailure(code: "unexpected", message: String(describing: error)))
+func applicationState(_ application: NSApplication) -> [String: Any] {
+    let current = NSRunningApplication.current
+    return [
+        "activationPolicy": application.activationPolicy().rawValue,
+        "mainEventLoopRunning": application.isRunning,
+        "mainThread": Thread.isMainThread,
+        "active": application.isActive, "hidden": application.isHidden,
+        "runningApplicationPolicy": current.activationPolicy.rawValue,
+        "runningApplicationFinishedLaunching": current.isFinishedLaunching,
+        "runningApplicationTerminated": current.isTerminated,
+        "launchDate": current.launchDate.map { $0.timeIntervalSince1970 as Any } ?? NSNull(),
+        "bundleURL": Bundle.main.bundleURL.path,
+        "bundleIdentifier": Bundle.main.bundleIdentifier.map { $0 as Any } ?? NSNull(),
+        "screens": NSScreen.screens.count
+    ]
 }
+
+func failStartup(_ caseName: String, evidence: [String: Any],
+                 code: String, message: String, exitCode: Int32 = 65) -> Never {
+    let report: [String: Any] = [
+        "schemaVersion": 1, "case": caseName, "status": "failed", "stage": "startup",
+        "errorCode": code, "error": message, "startup": evidence,
+        "completedStages": [], "events": [], "target": NSNull(), "other": NSNull(),
+        "pid": ProcessInfo.processInfo.processIdentifier,
+        "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
+        "nativeWindowExecution": false, "performanceAcceptance": false
+    ]
+    let data = try! JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data([10]))
+    exit(exitCode)
+}
+
+final class LaunchObserver: NSObject {
+    var finished = false
+
+    @objc func didFinishLaunching(_ notification: Notification) {
+        finished = true
+    }
+}
+
+guard CommandLine.arguments.count == 2 else {
+    failStartup("<invalid>", evidence: ["ready": false], code: "arguments",
+                message: "Expected exactly one native case name", exitCode: 64)
+}
+let caseName = CommandLine.arguments[1]
+let application = NSApplication.shared
+var startup: [String: Any] = ["ready": false, "requestedActivationPolicy": 0]
+startup["beforePolicy"] = applicationState(application)
+startup["setActivationPolicyReturned"] = application.setActivationPolicy(.regular)
+startup["afterPolicy"] = applicationState(application)
+// The return value describes the switch attempt. The native state is the gate,
+// including when this bundled process already has the requested regular policy.
+guard application.activationPolicy() == .regular else {
+    failStartup(caseName, evidence: startup, code: "activationPolicy",
+                message: "The application did not reach regular activation policy")
+}
+let launchObserver = LaunchObserver()
+NotificationCenter.default.addObserver(
+    launchObserver, selector: #selector(LaunchObserver.didFinishLaunching(_:)),
+    name: NSApplication.didFinishLaunchingNotification, object: application)
+application.finishLaunching()
+NotificationCenter.default.removeObserver(launchObserver)
+startup["didFinishLaunchingObserved"] = launchObserver.finished
+startup["afterFinishLaunching"] = applicationState(application)
+DispatchQueue.main.async {
+    startup["beforeCase"] = applicationState(application)
+    guard application.activationPolicy() == .regular,
+          application.isRunning, launchObserver.finished,
+          Thread.isMainThread, !NSScreen.screens.isEmpty else {
+        failStartup(caseName, evidence: startup, code: "applicationNotReady",
+                    message: "Native cases require regular policy, finished launch, a main event loop and a screen")
+    }
+    startup["ready"] = true
+    let probe = VisibilityProbe(caseName, startup: startup)
+    do {
+        try probe.configure()
+        probe.advance()
+    } catch let error as ProbeFailure {
+        probe.finish(error)
+    } catch {
+        probe.finish(ProbeFailure(code: "unexpected", message: String(describing: error)))
+    }
+}
+application.run()
+startup["eventLoopReturned"] = applicationState(application)
+failStartup(caseName, evidence: startup, code: "eventLoopReturned",
+            message: "The main event loop returned before a case result")

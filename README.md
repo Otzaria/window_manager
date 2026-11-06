@@ -117,6 +117,22 @@ old source, after the native window has reached the requested state. A build
 failure or timeout cannot satisfy that negative control. Raw reports, compiler
 output and command exit codes are retained even on failure.
 
+Startup records the activation policy before and after the switch request, its
+return value, the launch notification and the state inside the main event loop.
+Cases start only with the actual regular policy, a completed launch, the main
+event loop and a screen. A failed switch return alone does not describe the
+resulting policy. Startup failures produce an owned-process JSON report without
+claiming window execution; empty or malformed output keeps its exact command
+status and exit code in a separate case result, including in the final summary.
+Neither startup errors nor missing reports can satisfy an old-source control.
+
+The existing example integration workflow also runs on PR updates. It uses
+Flutter 3.47.7, which supports the Visual Studio 2026 generator, and Ubuntu 24.04
+for the legacy example's Ayatana dependency. The Windows and Linux example test
+commands are unchanged; no compiler warning is suppressed. The pre-existing
+macOS example integration command remains disabled, so that job's setup success
+is separate from the required native AppKit gate above.
+
 Portable checks:
 
 ```sh
