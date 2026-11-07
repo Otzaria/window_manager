@@ -346,10 +346,13 @@ func failStartup(_ caseName: String, evidence: [String: Any],
 }
 
 final class LaunchObserver: NSObject {
-    var finished = false
+    private(set) var finished = false
+    var onFinish: (() -> Void)?
 
     @objc func didFinishLaunching(_ notification: Notification) {
+        guard !finished else { return }
         finished = true
+        onFinish?()
     }
 }
 
@@ -370,22 +373,41 @@ guard application.activationPolicy() == .regular else {
                 message: "The application did not reach regular activation policy")
 }
 let launchObserver = LaunchObserver()
-NotificationCenter.default.addObserver(
-    launchObserver, selector: #selector(LaunchObserver.didFinishLaunching(_:)),
-    name: NSApplication.didFinishLaunchingNotification, object: application)
-application.finishLaunching()
-NotificationCenter.default.removeObserver(launchObserver)
-startup["didFinishLaunchingObserved"] = launchObserver.finished
-startup["afterFinishLaunching"] = applicationState(application)
-DispatchQueue.main.async {
+let startupStarted = ProcessInfo.processInfo.systemUptime
+var caseStarted = false
+startup["didFinishLaunchingObserved"] = false
+startup["timeoutSeconds"] = 5
+
+func stopObservingLaunch() {
+    NotificationCenter.default.removeObserver(launchObserver)
+    launchObserver.onFinish = nil
+}
+
+func failLaunchReadiness() -> Never {
+    startup["didFinishLaunchingObserved"] = launchObserver.finished
+    startup["beforeCase"] = applicationState(application)
+    startup["elapsedMs"] = (ProcessInfo.processInfo.systemUptime - startupStarted) * 1000
+    stopObservingLaunch()
+    failStartup(caseName, evidence: startup, code: "applicationNotReady",
+                message: "Native cases require regular policy, finished launch, a main event loop and a screen")
+}
+
+func startCaseWhenReady() {
+    guard !caseStarted else { return }
+    if ProcessInfo.processInfo.systemUptime - startupStarted >= 5 {
+        failLaunchReadiness()
+    }
     startup["beforeCase"] = applicationState(application)
     guard application.activationPolicy() == .regular,
           application.isRunning, launchObserver.finished,
           Thread.isMainThread, !NSScreen.screens.isEmpty else {
-        failStartup(caseName, evidence: startup, code: "applicationNotReady",
-                    message: "Native cases require regular policy, finished launch, a main event loop and a screen")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { startCaseWhenReady() }
+        return
     }
+    caseStarted = true
+    stopObservingLaunch()
     startup["ready"] = true
+    startup["elapsedMs"] = (ProcessInfo.processInfo.systemUptime - startupStarted) * 1000
     let probe = VisibilityProbe(caseName, startup: startup)
     do {
         try probe.configure()
@@ -396,7 +418,23 @@ DispatchQueue.main.async {
         probe.finish(ProbeFailure(code: "unexpected", message: String(describing: error)))
     }
 }
+launchObserver.onFinish = {
+    startup["didFinishLaunchingObserved"] = launchObserver.finished
+    startup["afterFinishLaunching"] = applicationState(application)
+    // Notification delivery can precede the first event. Start only after the
+    // actual main loop is running, retaining the observer until readiness.
+    DispatchQueue.main.async { startCaseWhenReady() }
+}
+NotificationCenter.default.addObserver(
+    launchObserver, selector: #selector(LaunchObserver.didFinishLaunching(_:)),
+    name: NSApplication.didFinishLaunchingNotification, object: application)
+DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+    if !caseStarted { failLaunchReadiness() }
+}
+// run() owns finishLaunching(). Removing the observer before run() can miss
+// launch completion; neither calling finishLaunching() nor its return is proof.
 application.run()
+stopObservingLaunch()
 startup["eventLoopReturned"] = applicationState(application)
 failStartup(caseName, evidence: startup, code: "eventLoopReturned",
             message: "The main event loop returned before a case result")

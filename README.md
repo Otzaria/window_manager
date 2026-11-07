@@ -126,6 +126,14 @@ claiming window execution; empty or malformed output keeps its exact command
 status and exit code in a separate case result, including in the final summary.
 Neither startup errors nor missing reports can satisfy an old-source control.
 
+The launch observer stays registered while `NSApplication.run()` completes
+launching. The first real launch notification schedules the readiness check on
+the main queue; duplicate notifications cannot start another case. A running
+loop alone cannot substitute for that notification. A five-second readiness
+deadline runs on the main queue; the unchanged 45-second process deadline also
+bounds a launch that never dispatches its main queue. The observer is removed
+when the case starts or startup fails.
+
 The existing example integration workflow also runs on PR updates. It uses
 Flutter 3.47.7, which supports the Visual Studio 2026 generator, and Ubuntu 24.04
 for the legacy example's Ayatana dependency. The Windows and Linux example test
