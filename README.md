@@ -90,6 +90,70 @@ void main() async {
 
 > Please see the example app of this plugin for a full example.
 
+## macOS visibility regression checks
+
+The Otzaria 0.5.2 branch sends `show` and `hide` through
+`WindowListener.onWindowEvent` when the corresponding native method actually
+changes window visibility. Repeated commands do not add duplicate events. The
+visibility operation and its event run together on the main queue; focus,
+minimize and restore retain their existing separate callbacks.
+
+On macOS, the following control compiles the complete production
+`WindowManager.swift` with the official Flutter framework and runs it against
+real `NSWindow` and `NSPanel` instances:
+
+```sh
+flutter precache --macos
+python3 tool/macos_visibility/run.py \
+  --flutter-root /absolute/path/to/flutter \
+  --output /absolute/path/to/new-evidence-directory
+```
+
+The control records native visibility and the callback thread at delivery. It
+checks ordered command bursts, repeated calls, separate windows, unchanged
+focus/minimize behavior and a window subclass that deliberately refuses a
+visibility change. The same harness must reproduce missing events in the pinned
+old source, after the native window has reached the requested state. A build
+failure or timeout cannot satisfy that negative control. Raw reports, compiler
+output and command exit codes are retained even on failure.
+
+Startup records the activation policy before and after the switch request, its
+return value, the launch notification and the state inside the main event loop.
+Cases start only with the actual regular policy, a completed launch, the main
+event loop and a screen. A failed switch return alone does not describe the
+resulting policy. Startup failures produce an owned-process JSON report without
+claiming window execution; empty or malformed output keeps its exact command
+status and exit code in a separate case result, including in the final summary.
+Neither startup errors nor missing reports can satisfy an old-source control.
+
+The launch observer stays registered while `NSApplication.run()` completes
+launching. The first real launch notification schedules the readiness check on
+the main queue; duplicate notifications cannot start another case. A running
+loop alone cannot substitute for that notification. A five-second readiness
+deadline runs on the main queue; the unchanged 45-second process deadline also
+bounds a launch that never dispatches its main queue. The observer is removed
+when the case starts or startup fails.
+
+The existing example integration workflow also runs on PR updates. It uses
+Flutter 3.47.7, which supports the Visual Studio 2026 generator, and Ubuntu 24.04
+for the legacy example's Ayatana dependency. The Windows and Linux example test
+commands are unchanged; no compiler warning is suppressed. The pre-existing
+macOS example integration command remains disabled, so that job's setup success
+is separate from the required native AppKit gate above.
+
+Portable checks:
+
+```sh
+python3 -m unittest discover -s tool/macos_visibility -p test_runner.py
+cd packages/window_manager
+flutter pub get --no-example
+flutter test --no-pub --concurrency=1 test/window_visibility_event_test.dart
+```
+
+These use controlled reports or method channels and do not establish native
+macOS acceptance. The AppKit control is a functional window test; it is not the
+Otzaria application scenario or a resource savings measurement.
+
 ## Related Articles
 
 - [Click the dock icon to restore after closing the window](https://leanflutter.dev/blog/click-dock-icon-to-restore-after-closing-the-window/)

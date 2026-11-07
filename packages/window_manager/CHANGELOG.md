@@ -1,3 +1,7 @@
+## Unreleased
+
+* macOS: emit generic `show` and `hide` events after native visibility changes, preserving queued command order and ignoring calls that do not change visibility.
+
 ## 0.5.2
 
 * Upgrade `screen_retriever` to `0.2.2` for full Swift Package Manager support.
