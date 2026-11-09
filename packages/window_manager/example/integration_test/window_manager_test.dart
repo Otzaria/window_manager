@@ -125,4 +125,14 @@ Future<void> main() async {
   testWidgets('isVisible', (tester) async {
     expect(await windowManager.isVisible(), isTrue);
   });
+
+  testWidgets(
+    'getTitleBarHeight does not crash after removing decorations',
+    (tester) async {
+      await windowManager.setAsFrameless();
+      expect(await windowManager.getTitleBarHeight(), isNonNegative);
+      await windowManager.setTitleBarStyle(TitleBarStyle.normal);
+    },
+    skip: !Platform.isLinux,
+  );
 }
