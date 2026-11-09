@@ -24,6 +24,8 @@ struct _WindowManagerPlugin {
   GdkEventButton _event_button;
   GdkDevice* grab_pointer;
   GtkCssProvider* css_provider;
+  guint button_press_signal_id;
+  gulong button_press_hook_id;
 };
 
 G_DEFINE_TYPE(WindowManagerPlugin, window_manager_plugin, g_object_get_type())
@@ -538,7 +540,8 @@ static FlMethodResponse* get_title_bar_height(WindowManagerPlugin* self,
 
   int title_bar_height = 0;
 
-  if (g_strcmp0(self->title_bar_style_, "hidden") != 0) {
+  if (widget != nullptr &&
+      g_strcmp0(self->title_bar_style_, "hidden") != 0) {
     title_bar_height = gtk_widget_get_allocated_height(widget);
   }
 
@@ -938,8 +941,25 @@ static void window_manager_plugin_handle_method_call(
 
 static void window_manager_plugin_dispose(GObject* object) {
   WindowManagerPlugin* self = WINDOW_MANAGER_PLUGIN(object);
+  if (self->button_press_hook_id != 0) {
+    g_signal_remove_emission_hook(self->button_press_signal_id,
+                                  self->button_press_hook_id);
+    self->button_press_hook_id = 0;
+  }
+  if (self->registrar != nullptr) {
+    GtkWindow* window = get_window(self);
+    if (GTK_IS_WINDOW(window)) {
+      g_signal_handlers_disconnect_by_data(window, self);
+    }
+  }
+  if (self->grab_pointer != nullptr) {
+    gdk_seat_ungrab(gdk_device_get_seat(self->grab_pointer));
+    self->grab_pointer = nullptr;
+  }
   g_clear_object(&self->css_provider);
-  g_free(self->title_bar_style_);
+  g_clear_pointer(&self->title_bar_style_, g_free);
+  g_clear_object(&self->channel);
+  g_clear_object(&self->registrar);
   G_OBJECT_CLASS(window_manager_plugin_parent_class)->dispose(object);
 }
 
@@ -1071,10 +1091,20 @@ gboolean on_mouse_press(GSignalInvocationHint* ihint,
                         const GValue* param_values,
                         gpointer data) {
   WindowManagerPlugin* plugin = WINDOW_MANAGER_PLUGIN(data);
-  GdkEventButton* event_button =
-      (GdkEventButton*)(g_value_get_boxed(param_values + 1));
+  if (n_param_values < 2) return TRUE;
 
-  // plugin->_event_button = event_button;
+  // This GTK emission hook is process-wide. Ignore clicks belonging to
+  // another Flutter window (or another GTK widget outside this window).
+  auto* source = GTK_WIDGET(g_value_get_object(param_values));
+  GtkWindow* own_window = get_window(plugin);
+  if (!GTK_IS_WIDGET(source) || !GTK_IS_WINDOW(own_window) ||
+      gtk_widget_get_toplevel(source) != GTK_WIDGET(own_window)) {
+    return TRUE;
+  }
+
+  auto* event_button =
+      (GdkEventButton*)g_value_get_boxed(param_values + 1);
+  if (event_button == nullptr) return TRUE;
 
   memset(&plugin->_event_button, 0, sizeof(plugin->_event_button));
   memcpy(&plugin->_event_button, event_button, sizeof(plugin->_event_button));
@@ -1121,9 +1151,10 @@ void window_manager_plugin_register_with_registrar(
                    G_CALLBACK(on_event_after), plugin);
   find_event_box(plugin, GTK_WIDGET(fl_plugin_registrar_get_view(registrar)));
 
-  g_signal_add_emission_hook(
-      g_signal_lookup("button-press-event", GTK_TYPE_WIDGET), 0, on_mouse_press,
-      plugin, NULL);
+  plugin->button_press_signal_id =
+      g_signal_lookup("button-press-event", GTK_TYPE_WIDGET);
+  plugin->button_press_hook_id = g_signal_add_emission_hook(
+      plugin->button_press_signal_id, 0, on_mouse_press, plugin, NULL);
 
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   plugin->channel =
