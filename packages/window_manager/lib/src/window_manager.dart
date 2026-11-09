@@ -46,33 +46,66 @@ class WindowManager {
       ObserverList<WindowListener>();
 
   Future<void> _methodCallHandler(MethodCall call) async {
+    if (call.method != 'onEvent') throw UnimplementedError();
+
+    // Decode the event once. Continuous move/resize events can have many
+    // listeners; avoid creating a callback map for every listener/event.
+    final String eventName = (call.arguments as Map)['eventName'] as String;
     for (final WindowListener listener in listeners) {
-      if (!_listeners.contains(listener)) {
-        return;
-      }
+      // A previous listener may have removed this one during dispatch.
+      // Do not abandon the rest of the snapshot in that case.
+      if (!_listeners.contains(listener)) continue;
 
-      if (call.method != 'onEvent') throw UnimplementedError();
-
-      String eventName = call.arguments['eventName'];
       listener.onWindowEvent(eventName);
-      Map<String, Function> funcMap = {
-        kWindowEventClose: listener.onWindowClose,
-        kWindowEventFocus: listener.onWindowFocus,
-        kWindowEventBlur: listener.onWindowBlur,
-        kWindowEventMaximize: listener.onWindowMaximize,
-        kWindowEventUnmaximize: listener.onWindowUnmaximize,
-        kWindowEventMinimize: listener.onWindowMinimize,
-        kWindowEventRestore: listener.onWindowRestore,
-        kWindowEventResize: listener.onWindowResize,
-        kWindowEventResized: listener.onWindowResized,
-        kWindowEventMove: listener.onWindowMove,
-        kWindowEventMoved: listener.onWindowMoved,
-        kWindowEventEnterFullScreen: listener.onWindowEnterFullScreen,
-        kWindowEventLeaveFullScreen: listener.onWindowLeaveFullScreen,
-        kWindowEventDocked: listener.onWindowDocked,
-        kWindowEventUndocked: listener.onWindowUndocked,
-      };
-      funcMap[eventName]?.call();
+      switch (eventName) {
+        case kWindowEventClose:
+          listener.onWindowClose();
+          break;
+        case kWindowEventFocus:
+          listener.onWindowFocus();
+          break;
+        case kWindowEventBlur:
+          listener.onWindowBlur();
+          break;
+        case kWindowEventMaximize:
+          listener.onWindowMaximize();
+          break;
+        case kWindowEventUnmaximize:
+          listener.onWindowUnmaximize();
+          break;
+        case kWindowEventMinimize:
+          listener.onWindowMinimize();
+          break;
+        case kWindowEventRestore:
+          listener.onWindowRestore();
+          break;
+        case kWindowEventResize:
+          listener.onWindowResize();
+          break;
+        case kWindowEventResized:
+          listener.onWindowResized();
+          break;
+        case kWindowEventMove:
+          listener.onWindowMove();
+          break;
+        case kWindowEventMoved:
+          listener.onWindowMoved();
+          break;
+        case kWindowEventEnterFullScreen:
+          listener.onWindowEnterFullScreen();
+          break;
+        case kWindowEventLeaveFullScreen:
+          listener.onWindowLeaveFullScreen();
+          break;
+        case kWindowEventDocked:
+          listener.onWindowDocked();
+          break;
+        case kWindowEventUndocked:
+          listener.onWindowUndocked();
+          break;
+        default:
+          break;
+      }
     }
   }
 
