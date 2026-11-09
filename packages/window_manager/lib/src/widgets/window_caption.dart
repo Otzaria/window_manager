@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MissingPluginException;
 
 import 'package:window_manager/src/widgets/drag_to_move_area.dart';
 import 'package:window_manager/src/widgets/window_caption_button.dart';
@@ -40,10 +43,34 @@ class WindowCaption extends StatefulWidget {
 }
 
 class _WindowCaptionState extends State<WindowCaption> with WindowListener {
+  bool _isMaximized = false;
+  bool _receivedMaximizeEvent = false;
+
   @override
   void initState() {
-    windowManager.addListener(this);
     super.initState();
+    windowManager.addListener(this);
+    // One platform query per caption lifetime, not one per widget rebuild.
+    unawaited(_readInitialMaximized());
+  }
+
+  Future<void> _readInitialMaximized() async {
+    try {
+      final maximized = await windowManager.isMaximized();
+      // A native state event may have arrived while the query was pending.
+      if (!mounted || _receivedMaximizeEvent || maximized == _isMaximized) {
+        return;
+      }
+      setState(() => _isMaximized = maximized);
+    } on MissingPluginException {
+      // Widget tests do not have a native desktop window.
+    }
+  }
+
+  void _setMaximized(bool value) {
+    _receivedMaximizeEvent = true;
+    if (!mounted || _isMaximized == value) return;
+    setState(() => _isMaximized = value);
   }
 
   @override
@@ -97,25 +124,19 @@ class _WindowCaptionState extends State<WindowCaption> with WindowListener {
               }
             },
           ),
-          FutureBuilder<bool>(
-            future: windowManager.isMaximized(),
-            builder: (BuildContext context, AsyncSnapshot<bool> snapshot) {
-              if (snapshot.data == true) {
-                return WindowCaptionButton.unmaximize(
+          _isMaximized
+              ? WindowCaptionButton.unmaximize(
                   brightness: widget.brightness,
                   onPressed: () {
                     windowManager.unmaximize();
                   },
-                );
-              }
-              return WindowCaptionButton.maximize(
-                brightness: widget.brightness,
-                onPressed: () {
-                  windowManager.maximize();
-                },
-              );
-            },
-          ),
+                )
+              : WindowCaptionButton.maximize(
+                  brightness: widget.brightness,
+                  onPressed: () {
+                    windowManager.maximize();
+                  },
+                ),
           WindowCaptionButton.close(
             brightness: widget.brightness,
             onPressed: () {
@@ -128,12 +149,8 @@ class _WindowCaptionState extends State<WindowCaption> with WindowListener {
   }
 
   @override
-  void onWindowMaximize() {
-    setState(() {});
-  }
+  void onWindowMaximize() => _setMaximized(true);
 
   @override
-  void onWindowUnmaximize() {
-    setState(() {});
-  }
+  void onWindowUnmaximize() => _setMaximized(false);
 }
