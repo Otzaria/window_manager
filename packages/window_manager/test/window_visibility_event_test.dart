@@ -22,6 +22,14 @@ class _Listener with WindowListener {
   void onWindowRestore() => dedicated.add('restore');
 }
 
+class _RemovingListener with WindowListener {
+  _RemovingListener(this.remove);
+  final void Function() remove;
+
+  @override
+  void onWindowEvent(String eventName) => remove();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const channel = MethodChannel('window_manager');
@@ -83,6 +91,22 @@ void main() {
       ['show', 'focus', 'minimize', 'restore', 'blur', 'hide'],
     );
     expect(listener.dedicated, ['focus', 'minimize', 'restore', 'blur']);
+  });
+
+  test('removing a listener during dispatch does not skip later listeners',
+      () async {
+    final removed = _Listener();
+    final tail = _Listener();
+    final head = _RemovingListener(() => manager.removeListener(removed));
+    manager.addListener(head);
+    manager.addListener(removed);
+    manager.addListener(tail);
+
+    await nativeEvent('focus');
+
+    expect(removed.events, isEmpty);
+    expect(tail.events, ['focus']);
+    expect(tail.dedicated, ['focus']);
   });
 
   test('a detached listener cannot receive later visibility events', () async {
