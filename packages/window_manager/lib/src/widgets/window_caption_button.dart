@@ -44,7 +44,7 @@ class _IconChromeMinimizePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return false;
+    return oldDelegate is! _IconChromeMinimizePainter || oldDelegate.color != color;
   }
 }
 
@@ -109,7 +109,7 @@ class _IconChromeMaximizePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return false;
+    return oldDelegate is! _IconChromeMaximizePainter || oldDelegate.color != color;
   }
 }
 
@@ -197,7 +197,7 @@ class _IconChromeUnmaximizePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return false;
+    return oldDelegate is! _IconChromeUnmaximizePainter || oldDelegate.color != color;
   }
 }
 
@@ -251,7 +251,7 @@ class _IconChromeClosePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return false;
+    return oldDelegate is! _IconChromeClosePainter || oldDelegate.color != color;
   }
 }
 
@@ -380,10 +380,12 @@ class _WindowCaptionButtonState extends State<WindowCaptionButton> {
   bool _isPressed = false;
 
   void _onEntered({required bool hovered}) {
+    if (_isHovering == hovered) return;
     setState(() => _isHovering = hovered);
   }
 
   void _onActive({required bool pressed}) {
+    if (_isPressed == pressed) return;
     setState(() => _isPressed = pressed);
   }
 
@@ -401,14 +403,15 @@ class _WindowCaptionButtonState extends State<WindowCaptionButton> {
       iconColor = widget.buttonIconColorScheme.pressed;
     }
 
+    final enabled = widget.onPressed != null;
     return MouseRegion(
-      onExit: (value) => _onEntered(hovered: false),
-      onHover: (value) => _onEntered(hovered: true),
+      onEnter: enabled ? (_) => _onEntered(hovered: true) : null,
+      onExit: enabled ? (_) => _onEntered(hovered: false) : null,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTapDown: (_) => _onActive(pressed: true),
-        onTapCancel: () => _onActive(pressed: false),
-        onTapUp: (_) => _onActive(pressed: false),
+        onTapDown: enabled ? (_) => _onActive(pressed: true) : null,
+        onTapCancel: enabled ? () => _onActive(pressed: false) : null,
+        onTapUp: enabled ? (_) => _onActive(pressed: false) : null,
         onTap: widget.onPressed,
         child: Container(
           constraints: const BoxConstraints(minWidth: 46, minHeight: 32),
@@ -416,9 +419,10 @@ class _WindowCaptionButtonState extends State<WindowCaptionButton> {
             color: bgColor,
           ),
           child: Center(
-            child: WindowCaptionButtonIcon(
-              color: iconColor,
-              createPainter: (color) {
+            child: widget.icon ??
+                WindowCaptionButtonIcon(
+                  color: iconColor,
+                  createPainter: (color) {
                 switch (widget.iconName) {
                   case _kIconChromeMinimize:
                     return _IconChromeMinimizePainter(color!);
@@ -431,8 +435,8 @@ class _WindowCaptionButtonState extends State<WindowCaptionButton> {
                   default:
                     return _IconChromeClosePainter(color!);
                 }
-              },
-            ),
+                  },
+                ),
           ),
         ),
       ),
