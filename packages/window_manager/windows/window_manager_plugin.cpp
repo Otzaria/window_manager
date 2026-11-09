@@ -28,7 +28,7 @@ bool IsWindows11OrGreater() {
     dwBuild = (DWORD)(HIWORD(dwVersion));
 #pragma warning(pop)
 
-  return dwBuild < 22000;
+  return dwBuild >= 22000;
 }
 
 class WindowManagerPlugin : public flutter::Plugin {
@@ -120,6 +120,8 @@ WindowManagerPlugin::WindowManagerPlugin(
 WindowManagerPlugin::~WindowManagerPlugin() {
   registrar->UnregisterTopLevelWindowProcDelegate(window_proc_id);
   channel = nullptr;
+  delete window_manager;
+  window_manager = nullptr;
 }
 
 void WindowManagerPlugin::_EmitEvent(std::string eventName) {
@@ -310,10 +312,12 @@ std::optional<LRESULT> WindowManagerPlugin::HandleWindowProc(HWND hWnd,
       window_manager->last_state = STATE_NORMAL;
     } else if (window_manager->last_state != STATE_FULLSCREEN_ENTERED) {
       if (wParam == SIZE_MAXIMIZED) {
-        _EmitEvent("maximize");
+        if (window_manager->last_state != STATE_MAXIMIZED)
+          _EmitEvent("maximize");
         window_manager->last_state = STATE_MAXIMIZED;
       } else if (wParam == SIZE_MINIMIZED) {
-        _EmitEvent("minimize");
+        if (window_manager->last_state != STATE_MINIMIZED)
+          _EmitEvent("minimize");
         window_manager->last_state = STATE_MINIMIZED;
         return 0;
       } else if (wParam == SIZE_RESTORED) {
