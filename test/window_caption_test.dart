@@ -188,10 +188,12 @@ void main() {
     // Resizing can emit hundreds of events per second. None should trigger
     // more synchronous native getters for unrelated window state flags.
     for (var i = 0; i < 150; i++) {
-      await b.emit(const WindowResizedEvent(
-        windowId: 2,
-        newSize: nativeapi.Size(width: 800, height: 600),
-      ));
+      await b.emit(
+        const WindowResizedEvent(
+          windowId: 2,
+          newSize: nativeapi.Size(width: 800, height: 600),
+        ),
+      );
     }
     expect(b.stateReads, readsOfB);
 
