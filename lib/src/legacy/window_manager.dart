@@ -4,7 +4,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show Brightness, Color, Offset, PlatformDispatcher, Rect, Size;
 
-import 'package:flutter/foundation.dart' show ObserverList, VoidCallback;
+import 'package:flutter/foundation.dart'
+    show ObserverList, VoidCallback, visibleForTesting;
 import 'package:flutter/painting.dart' show Alignment;
 import 'package:nativeapi/nativeapi.dart' as nativeapi;
 import 'package:nativeapi_flutter/nativeapi_flutter.dart'
@@ -39,6 +40,10 @@ const kWindowEventLeaveFullScreen = 'leave-full-screen';
 const kWindowEventDocked = 'docked';
 const kWindowEventUndocked = 'undocked';
 
+// Reported by 0.5.x through onWindowEvent only, without a named constant.
+const _kWindowEventShow = 'show';
+const _kWindowEventHide = 'hide';
+
 @Deprecated(
   'The 0.5.x compatible API will be removed in a future release. Use the native API from package:window_manager/window_manager.dart.',
 )
@@ -63,8 +68,21 @@ class WindowManager {
   final ObserverList<WindowListener> _listeners =
       ObserverList<WindowListener>();
 
+  // Move/resize events are frequent; only rebuild the immutable iteration
+  // snapshot when subscriptions change.
+  List<WindowListener> _listenerSnapshot = const <WindowListener>[];
+
   nativeapi.Window? _window;
   nativeapi.ListenerId? _nativeListenerId;
+
+  /// Addresses [window] instead of the platform's current window, or goes
+  /// back to the current window with null. For tests of this bridge only.
+  @visibleForTesting
+  void debugBindWindow(nativeapi.Window? window) {
+    _unwireNativeEvents();
+    _window = window;
+    if (_listeners.isNotEmpty || _isPreventClose) _wireNativeEvents();
+  }
 
   bool _isPreventClose = false;
   bool _isDestroying = false;
@@ -81,7 +99,7 @@ class WindowManager {
   }
 
   List<WindowListener> get listeners {
-    return List<WindowListener>.from(_listeners);
+    return List<WindowListener>.from(_listenerSnapshot);
   }
 
   bool get hasListeners {
@@ -90,11 +108,13 @@ class WindowManager {
 
   void addListener(WindowListener listener) {
     _listeners.add(listener);
+    _listenerSnapshot = List<WindowListener>.of(_listeners);
     _wireNativeEvents();
   }
 
   void removeListener(WindowListener listener) {
     _listeners.remove(listener);
+    _listenerSnapshot = List<WindowListener>.of(_listeners);
     if (_listeners.isEmpty && !_isPreventClose) {
       _unwireNativeEvents();
     }
@@ -251,9 +271,13 @@ class WindowManager {
   }
 
   /// Shows and gives focus to the window.
+  ///
+  /// Listeners get `onWindowEvent('show')` when this call makes a hidden
+  /// window visible.
   Future<void> show({bool inactive = false}) async {
     final window = _target;
     if (window == null) return;
+    final wasVisible = window.isVisible;
     if (window.isMinimized) {
       window.restore();
     }
@@ -262,11 +286,23 @@ class WindowManager {
     } else {
       window.show();
     }
+    // nativeapi has no show/hide event; 0.5.x reported both through
+    // onWindowEvent, which apps use to pause and resume work.
+    // Check the result: the platform may refuse or defer the change.
+    if (!wasVisible && window.isVisible) _emit(_kWindowEventShow);
   }
 
   /// Hides the window.
+  ///
+  /// Listeners get `onWindowEvent('hide')` when this call hides a window that
+  /// was visible or minimized.
   Future<void> hide() async {
-    _target?.hide();
+    final window = _target;
+    if (window == null) return;
+    // macOS reports a minimized window as not visible.
+    final wasShown = window.isVisible || window.isMinimized;
+    window.hide();
+    if (wasShown && !window.isVisible) _emit(_kWindowEventHide);
   }
 
   /// Returns `bool` - Whether the window is visible to the user.
@@ -770,17 +806,21 @@ class WindowManager {
       case nativeapi.WindowBlurredEvent():
         _emit(kWindowEventBlur);
       case nativeapi.WindowMaximizedEvent():
+        // A minimized window that was maximized comes back with this event
+        // alone, as 0.5.x reported it on Windows.
+        _isMinimized = false;
         _isMaximized = true;
         _emit(kWindowEventMaximize);
       case nativeapi.WindowMinimizedEvent():
         _isMinimized = true;
         _emit(kWindowEventMinimize);
       case nativeapi.WindowRestoredEvent():
-        if (_isMinimized) {
-          _isMinimized = false;
-          _emit(kWindowEventRestore);
-        } else if (_isMaximized) {
-          _isMaximized = false;
+        final wasMinimized = _isMinimized;
+        final wasMaximized = _isMaximized;
+        _isMinimized = false;
+        // Leaving the minimized state may land back in the maximized one.
+        _isMaximized = _target?.isMaximized ?? false;
+        if (!wasMinimized && wasMaximized && !_isMaximized) {
           _emit(kWindowEventUnmaximize);
         } else {
           _emit(kWindowEventRestore);
@@ -791,10 +831,10 @@ class WindowManager {
       case nativeapi.WindowMovedEvent():
         _emit(kWindowEventMove);
         _emit(kWindowEventMoved);
-      case nativeapi.WindowCreatedEvent():
-      case nativeapi.WindowClosedEvent():
-      case nativeapi.WindowPropertyChangedEvent():
-      case nativeapi.WindowOcclusionChangedEvent():
+      // Created, closed, property and occlusion changes have no 0.5.x
+      // counterpart. A default rather than a list keeps this switch compiling
+      // when a nativeapi 0.5.x release adds a WindowEvent subclass.
+      default:
         break;
     }
   }
@@ -808,29 +848,46 @@ class WindowManager {
   }
 
   void _emit(String eventName) {
-    for (final listener in listeners) {
-      if (!_listeners.contains(listener)) {
-        continue;
-      }
+    if (_listeners.isEmpty) return;
+    // Existing listeners receive this event. Callbacks may subscribe others,
+    // which join only on the next event rather than this iteration.
+    for (final listener in _listenerSnapshot) {
+      if (!_listeners.contains(listener)) continue;
       listener.onWindowEvent(eventName);
-      final Map<String, void Function()> funcMap = {
-        kWindowEventClose: listener.onWindowClose,
-        kWindowEventFocus: listener.onWindowFocus,
-        kWindowEventBlur: listener.onWindowBlur,
-        kWindowEventMaximize: listener.onWindowMaximize,
-        kWindowEventUnmaximize: listener.onWindowUnmaximize,
-        kWindowEventMinimize: listener.onWindowMinimize,
-        kWindowEventRestore: listener.onWindowRestore,
-        kWindowEventResize: listener.onWindowResize,
-        kWindowEventResized: listener.onWindowResized,
-        kWindowEventMove: listener.onWindowMove,
-        kWindowEventMoved: listener.onWindowMoved,
-        kWindowEventEnterFullScreen: listener.onWindowEnterFullScreen,
-        kWindowEventLeaveFullScreen: listener.onWindowLeaveFullScreen,
-        kWindowEventDocked: listener.onWindowDocked,
-        kWindowEventUndocked: listener.onWindowUndocked,
-      };
-      funcMap[eventName]?.call();
+      // A switch, not a map of tear-offs per listener: move and resize arrive
+      // many times per second while the user drags the window.
+      switch (eventName) {
+        case kWindowEventClose:
+          listener.onWindowClose();
+        case kWindowEventFocus:
+          listener.onWindowFocus();
+        case kWindowEventBlur:
+          listener.onWindowBlur();
+        case kWindowEventMaximize:
+          listener.onWindowMaximize();
+        case kWindowEventUnmaximize:
+          listener.onWindowUnmaximize();
+        case kWindowEventMinimize:
+          listener.onWindowMinimize();
+        case kWindowEventRestore:
+          listener.onWindowRestore();
+        case kWindowEventResize:
+          listener.onWindowResize();
+        case kWindowEventResized:
+          listener.onWindowResized();
+        case kWindowEventMove:
+          listener.onWindowMove();
+        case kWindowEventMoved:
+          listener.onWindowMoved();
+        case kWindowEventEnterFullScreen:
+          listener.onWindowEnterFullScreen();
+        case kWindowEventLeaveFullScreen:
+          listener.onWindowLeaveFullScreen();
+        case kWindowEventDocked:
+          listener.onWindowDocked();
+        case kWindowEventUndocked:
+          listener.onWindowUndocked();
+      }
     }
   }
 }
