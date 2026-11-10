@@ -68,6 +68,10 @@ class WindowManager {
   final ObserverList<WindowListener> _listeners =
       ObserverList<WindowListener>();
 
+  // Move/resize events are frequent; only rebuild the immutable iteration
+  // snapshot when subscriptions change.
+  List<WindowListener> _listenerSnapshot = const <WindowListener>[];
+
   nativeapi.Window? _window;
   nativeapi.ListenerId? _nativeListenerId;
 
@@ -95,7 +99,7 @@ class WindowManager {
   }
 
   List<WindowListener> get listeners {
-    return List<WindowListener>.from(_listeners);
+    return List<WindowListener>.from(_listenerSnapshot);
   }
 
   bool get hasListeners {
@@ -104,11 +108,13 @@ class WindowManager {
 
   void addListener(WindowListener listener) {
     _listeners.add(listener);
+    _listenerSnapshot = List<WindowListener>.of(_listeners);
     _wireNativeEvents();
   }
 
   void removeListener(WindowListener listener) {
     _listeners.remove(listener);
+    _listenerSnapshot = List<WindowListener>.of(_listeners);
     if (_listeners.isEmpty && !_isPreventClose) {
       _unwireNativeEvents();
     }
@@ -843,8 +849,9 @@ class WindowManager {
 
   void _emit(String eventName) {
     if (_listeners.isEmpty) return;
-    // Iterate over a copy: a callback may add or remove listeners.
-    for (final listener in listeners) {
+    // Existing listeners receive this event. Callbacks may subscribe others,
+    // which join only on the next event rather than this iteration.
+    for (final listener in _listenerSnapshot) {
       if (!_listeners.contains(listener)) continue;
       listener.onWindowEvent(eventName);
       // A switch, not a map of tear-offs per listener: move and resize arrive

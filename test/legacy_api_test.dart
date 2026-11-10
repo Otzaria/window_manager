@@ -367,6 +367,34 @@ void main() {
     },
   );
 
+  test('a listener added during dispatch joins the next event only', () async {
+    final received = <String>[];
+    late final _RunOnClose newlyAdded;
+    var added = false;
+    final first = _RunOnClose(() {
+      if (!added) {
+        added = true;
+        windowManager.addListener(newlyAdded);
+      }
+    });
+    newlyAdded = _RunOnClose(() => received.add('new'));
+    final tail = _RunOnClose(() => received.add('tail'));
+    windowManager.addListener(first);
+    windowManager.addListener(tail);
+    addTearDown(() {
+      windowManager.removeListener(first);
+      windowManager.removeListener(tail);
+      windowManager.removeListener(newlyAdded);
+    });
+    await windowManager.setPreventClose(true);
+    addTearDown(() => windowManager.setPreventClose(false));
+
+    await windowManager.close();
+    expect(received, ['tail']);
+    await windowManager.close();
+    expect(received, ['tail', 'tail', 'new']);
+  });
+
   test('listeners are tracked without touching the window', () {
     final listener = _Implemented();
     expect(windowManager.hasListeners, isFalse);
