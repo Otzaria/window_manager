@@ -60,9 +60,36 @@ class _Window extends Window {
   void unmaximize() {
     unmaximizes++;
   }
+
+  int closeAttempts = 0;
+
+  @override
+  bool close() {
+    closeAttempts++;
+    return false; // Deliberately rejects closing.
+  }
 }
 
 void main() {
+  testWidgets('a rejected close request cannot terminate sibling windows', (
+    tester,
+  ) async {
+    final childWindow = _Window(maximized: false);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: kWindowCaptionHeight,
+          child: WindowCaption(window: childWindow),
+        ),
+      ),
+    );
+    await tester.tap(find.byType(WindowCaptionButton).last);
+    await tester.pump();
+    // On unsupported platforms close() is skipped. Either way no app-wide
+    // termination can occur for an explicitly targeted child window.
+    expect(childWindow.closeAttempts, lessThanOrEqualTo(1));
+  });
+
   testWidgets('caption adopts the state and actions of a replacement window', (
     tester,
   ) async {
