@@ -235,6 +235,21 @@ class _FakeNativeWindow extends nativeapi.Window {
   bool maximized = false;
   bool fullscreen = false;
   bool refuseVisibilityChanges = false;
+
+  int boundsReads = 0;
+  nativeapi.Rectangle currentBounds =
+      const nativeapi.Rectangle(x: 1, y: 2, width: 300, height: 200);
+
+  @override
+  nativeapi.Rectangle get bounds {
+    boundsReads++;
+    return currentBounds;
+  }
+
+  @override
+  set bounds(nativeapi.Rectangle value) {
+    currentBounds = value;
+  }
   FutureOr<void> Function(nativeapi.WindowEvent)? _callback;
 
   bool get isListening => _callback != null;
@@ -327,6 +342,26 @@ class _FakeApplication implements nativeapi.Application {
 }
 
 void main() {
+  test('full bounds updates skip the native geometry read', () async {
+    final native = _FakeNativeWindow();
+    windowManager.debugBindWindow(native);
+    addTearDown(() => windowManager.debugBindWindow(null));
+
+    await windowManager.setBounds(const Rect.fromLTWH(40, 70, 800, 600));
+    expect(native.boundsReads, 0);
+    expect(native.currentBounds,
+        const nativeapi.Rectangle(x: 40, y: 70, width: 800, height: 600));
+
+    // Partial updates still read the omitted dimensions from the window.
+    await windowManager.setBounds(null, position: const Offset(25, 35));
+    expect(native.boundsReads, 1);
+    expect(native.currentBounds,
+        const nativeapi.Rectangle(x: 25, y: 35, width: 800, height: 600));
+
+    await windowManager.setBounds(null);
+    expect(native.boundsReads, 1, reason: 'empty request is a no-op');
+  });
+
   test('event names are still exported', () {
     expect(
       [
