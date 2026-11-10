@@ -286,6 +286,46 @@ class _FakeNativeWindow extends nativeapi.Window {
   }
 }
 
+class _FakeCloseRequest extends nativeapi.EventRequest {
+  _FakeCloseRequest() : super.borrowed(0);
+
+  bool cancelled = false;
+
+  @override
+  bool cancel() => cancelled = true;
+}
+
+// Only the primary window and taskbar calls the bridge makes; any other
+// member throws.
+class _FakeApplication implements nativeapi.Application {
+  nativeapi.Window? primaryWindow;
+  final List<String> calls = <String>[];
+
+  @override
+  nativeapi.Window? getPrimaryWindow() => primaryWindow;
+
+  @override
+  void setPrimaryWindow(nativeapi.Window? window) {
+    calls.add('setPrimaryWindow');
+    primaryWindow = window;
+  }
+
+  @override
+  bool setProgressBar(double progress) {
+    calls.add('setProgressBar($progress)');
+    return true;
+  }
+
+  @override
+  bool setBadgeLabel(String label) {
+    calls.add('setBadgeLabel($label)');
+    return true;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   test('event names are still exported', () {
     expect(
@@ -513,6 +553,157 @@ void main() {
       await fake.fire(const nativeapi.WindowCreatedEvent(windowId: 1));
       await fake.fire(const nativeapi.WindowClosedEvent(windowId: 1));
       expect(listener.events, isEmpty);
+    });
+  });
+
+  group('late window resolution', () {
+    nativeapi.Window? current;
+    var lookups = 0;
+
+    setUp(() {
+      current = null;
+      lookups = 0;
+      windowManager.debugCurrentWindowOverride = () {
+        lookups++;
+        return current;
+      };
+      windowManager.bindWindow(null);
+    });
+
+    tearDown(() async {
+      await windowManager.setPreventClose(false);
+      windowManager.debugCurrentWindowOverride = null;
+      windowManager.debugApplicationOverride = null;
+      windowManager.bindWindow(null);
+    });
+
+    test('a window found after the listener is wired then', () async {
+      final listener = _Implemented();
+      windowManager.addListener(listener);
+      addTearDown(() => windowManager.removeListener(listener));
+      await windowManager.setPreventClose(true);
+      expect(await windowManager.isVisible(), isFalse);
+
+      final fake = _FakeNativeWindow();
+      current = fake;
+      // Any call that addresses the window finds it now.
+      await windowManager.setBounds(const Rect.fromLTWH(0, 0, 800, 600));
+      expect(fake.isListening, isTrue);
+
+      final request = _FakeCloseRequest();
+      await fake.fire(
+        nativeapi.WindowCloseRequestedEvent(windowId: 1, request: request),
+      );
+      expect(request.cancelled, isTrue);
+      expect(listener.events, [kWindowEventClose]);
+    });
+
+    test('a missing window is looked up again on every call', () async {
+      await windowManager.isVisible();
+      await windowManager.isVisible();
+      expect(lookups, 2);
+
+      current = _FakeNativeWindow();
+      await windowManager.isVisible();
+      await windowManager.isVisible();
+      expect(lookups, 3);
+    });
+
+    test('ensureInitialized wires a window found late', () async {
+      final listener = _Implemented();
+      windowManager.addListener(listener);
+      addTearDown(() => windowManager.removeListener(listener));
+
+      final fake = _FakeNativeWindow();
+      current = fake;
+      await windowManager.ensureInitialized();
+      expect(fake.isListening, isTrue);
+    });
+
+    test('show without a window is carried out on the bound one', () async {
+      final listener = _Implemented();
+      windowManager.addListener(listener);
+      addTearDown(() => windowManager.removeListener(listener));
+
+      await windowManager.show();
+      expect(listener.events, isEmpty);
+
+      final fake = _FakeNativeWindow();
+      windowManager.bindWindow(fake);
+      expect(fake.visible, isTrue);
+      expect(listener.events, ['show']);
+    });
+
+    test('hide cancels a show that found no window', () async {
+      await windowManager.show();
+      await windowManager.hide();
+
+      final fake = _FakeNativeWindow();
+      current = fake;
+      await windowManager.isVisible();
+      expect(fake.visible, isFalse);
+    });
+
+    test('bindWindow moves listeners and prevent-close', () async {
+      final listener = _Implemented();
+      windowManager.addListener(listener);
+      addTearDown(() => windowManager.removeListener(listener));
+      await windowManager.setPreventClose(true);
+
+      final first = _FakeNativeWindow();
+      current = first;
+      await windowManager.ensureInitialized();
+      expect(first.isListening, isTrue);
+
+      final second = _FakeNativeWindow();
+      windowManager.bindWindow(second);
+      expect(first.isListening, isFalse);
+      expect(second.isListening, isTrue);
+      expect(await windowManager.isPreventClose(), isTrue);
+
+      final request = _FakeCloseRequest();
+      await second.fire(
+        nativeapi.WindowCloseRequestedEvent(windowId: 2, request: request),
+      );
+      expect(request.cancelled, isTrue);
+      expect(listener.events, [kWindowEventClose]);
+
+      // Back to the current window.
+      windowManager.bindWindow(null);
+      expect(second.isListening, isFalse);
+      expect(first.isListening, isTrue);
+    });
+
+    test('taskbar progress designates the window as primary', () async {
+      final application = _FakeApplication();
+      windowManager.debugApplicationOverride = application;
+
+      // No window: nothing to designate.
+      await windowManager.setProgressBar(0.25);
+      expect(application.primaryWindow, isNull);
+
+      final fake = _FakeNativeWindow();
+      current = fake;
+      await windowManager.setProgressBar(0.5);
+      expect(application.primaryWindow, same(fake));
+      await windowManager.setBadgeLabel('3');
+      expect(application.calls, [
+        'setProgressBar(0.25)',
+        'setPrimaryWindow',
+        'setProgressBar(0.5)',
+        'setBadgeLabel(3)',
+      ]);
+    });
+
+    test('taskbar progress keeps a primary window the app chose', () async {
+      final chosen = _FakeNativeWindow();
+      final application = _FakeApplication()..primaryWindow = chosen;
+      windowManager.debugApplicationOverride = application;
+      current = _FakeNativeWindow();
+
+      await windowManager.setProgressBar(1);
+      expect(application.primaryWindow, same(chosen));
+      expect(application.calls, ['setProgressBar(1.0)']);
     });
   });
 

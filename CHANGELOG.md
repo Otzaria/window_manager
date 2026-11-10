@@ -1,3 +1,18 @@
+## Unreleased
+
+* `legacy.dart` no longer loses listeners and `setPreventClose(true)` set up before
+  the platform reports a current window, as on Windows while the window is still
+  hidden: the window is looked up again on every call, and the first one found is
+  wired then. A `show()` that found no window is carried out on the window found or
+  bound next. On Windows a hidden window is found as this process's only top-level
+  window hosting a Flutter view.
+* `windowManager.bindWindow(window)` addresses a given `nativeapi.Window` — for example
+  `nativeapi.Window.createWithNativeWindow(hwnd)` — instead of the current one, moving
+  listeners and prevent-close to it; `bindWindow(null)` goes back to the current window.
+* `setProgressBar` and `setBadgeLabel` of `legacy.dart` make the addressed window the
+  application's primary window when none is set, so Windows does not put them on
+  another application's taskbar button.
+
 ## 0.6.0
 
 * Restore frameless client areas, native macOS/Windows `getId()` results, independent macOS zoom policy and Windows fullscreen drag/resize restrictions through core.
