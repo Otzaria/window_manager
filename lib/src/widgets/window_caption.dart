@@ -126,19 +126,17 @@ class _WindowCaptionState extends State<WindowCaption> {
 
   void _close() {
     final window = _window;
-    if (window != null) {
-      final attempted = tryNative<bool?>(() {
-        if (!nativeapi.Window.isCloseSupported()) return null;
-        return window.close();
-      });
-      // False can mean a close veto. A rejected close request must not turn
-      // into Application.quit(), which would terminate every open window.
-      if (attempted != null) return;
-    }
-    // No native close implementation: only the implicit primary-window
-    // caption may fall back to exiting the app. An explicit child window
-    // must never terminate other windows merely because close is unsupported.
-    if (widget.window == null) {
+    final closed =
+        window != null &&
+        (tryNative(
+              () => nativeapi.Window.isCloseSupported() && window.close(),
+            ) ??
+            false);
+    // Window.close() returns true once the request is queued; a veto arrives
+    // asynchronously, so false means the request could not be made. Only the
+    // implicit current-window caption may then fall back to quitting: a
+    // caption bound to an explicit window must never end the whole app.
+    if (!closed && widget.window == null) {
       tryNative(() => nativeapi.Application.instance.quit(0));
     }
   }
