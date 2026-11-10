@@ -166,11 +166,11 @@ class WindowManager {
   // Windows reports only the active window as current, so a window kept
   // hidden until the app is ready would be out of reach until then. Linux and
   // macOS already fall back to a hidden window of their own.
-  static nativeapi.Window? _findHiddenWindowOnWindows() {
+  nativeapi.Window? _findHiddenWindowOnWindows() {
     if (!Platform.isWindows) return null;
     // An app that designated its primary window has one even while it is
     // hidden.
-    final primary = nativeapi.Application.instance.getPrimaryWindow();
+    final primary = _application.getPrimaryWindow();
     if (primary != null) return primary;
     final hwnd = findSoleFlutterHostWindow();
     if (hwnd == 0) return null;
