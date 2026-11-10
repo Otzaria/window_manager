@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nativeapi/nativeapi.dart' as nativeapi;
 import 'package:window_manager/legacy.dart';
+import 'package:window_manager/src/legacy/flutter_host_window_win32.dart';
 
 class _Mixed with WindowListener {}
 
@@ -705,6 +706,12 @@ void main() {
       expect(application.primaryWindow, same(chosen));
       expect(application.calls, ['setProgressBar(1.0)']);
     });
+  });
+
+  test('a test process has no Flutter host window to find', () {
+    // Off Windows the lookup does not run; on Windows the test runner hosts
+    // no Flutter view.
+    expect(findSoleFlutterHostWindow(), 0);
   });
 
   test('what the platform cannot do answers instead of throwing', () async {

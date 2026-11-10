@@ -1,6 +1,7 @@
 // ignore_for_file: deprecated_member_use_from_same_package
 
 import 'dart:async';
+import 'dart:ffi' show Pointer, Void;
 import 'dart:io';
 import 'dart:ui' show Brightness, Color, Offset, PlatformDispatcher, Rect, Size;
 
@@ -18,6 +19,7 @@ import 'package:nativeapi_flutter/nativeapi_flutter.dart'
         RectangleToRect,
         SizeToNative;
 import 'package:window_manager/src/legacy/calc_window_position.dart';
+import 'package:window_manager/src/legacy/flutter_host_window_win32.dart';
 import 'package:window_manager/src/legacy/window_listener.dart';
 import 'package:window_manager/src/legacy/window_options.dart';
 import 'package:window_manager/src/native_guard.dart';
@@ -159,7 +161,19 @@ class WindowManager {
           nativeapi.WindowManager.instance.getCurrent() ??
           // An app that designated its primary window has one even while it
           // is hidden.
-          nativeapi.Application.instance.getPrimaryWindow(),
+          nativeapi.Application.instance.getPrimaryWindow() ??
+          _findHiddenHostWindow(),
+    );
+  }
+
+  // Windows reports only the active window as current, so a window kept
+  // hidden until the app is ready would be out of reach until then.
+  static nativeapi.Window? _findHiddenHostWindow() {
+    if (!Platform.isWindows) return null;
+    final hwnd = findSoleFlutterHostWindow();
+    if (hwnd == 0) return null;
+    return nativeapi.Window.createWithNativeWindow(
+      Pointer<Void>.fromAddress(hwnd),
     );
   }
 

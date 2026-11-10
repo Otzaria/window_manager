@@ -227,13 +227,16 @@ What differs from 0.5.x:
 #### Choosing the window `legacy.dart` addresses
 
 By default every call addresses the window the platform currently considers the app's
-own (nativeapi's `WindowManager.getCurrent()`). On Windows that is the active window,
-so a window kept hidden during startup cannot be found before it is shown. The bridge
-looks again on every call until it finds one: listeners and `setPreventClose(true)`
-set up earlier are connected to it then, and a `show()` that found no window is carried
-out on it. Calls that change the window before that do nothing.
+own (nativeapi's `WindowManager.getCurrent()`), else the application's primary window.
+On Windows the current window is the active one, which a window kept hidden during
+startup is not; there the bridge also takes this process's top-level window that hosts
+the Flutter view (window class `FLUTTERVIEW`), hidden or not, when exactly one exists.
+Until a window is found the bridge looks again on every call: listeners and
+`setPreventClose(true)` set up earlier are connected to the first window found, and a
+`show()` that found no window is carried out on it. Other calls do nothing until then.
 
-To address the window from the start, bind it explicitly. On Windows,
+To address a particular window, for example with several Flutter windows in one
+process, bind it explicitly. On Windows,
 `nativeapi.Window.createWithNativeWindow` wraps an `HWND`, for example one the runner
 passes to Dart:
 

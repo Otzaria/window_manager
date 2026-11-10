@@ -4,7 +4,8 @@
   the platform reports a current window, as on Windows while the window is still
   hidden: the window is looked up again on every call, and the first one found is
   wired then. A `show()` that found no window is carried out on the window found or
-  bound next.
+  bound next. On Windows a hidden window is found as this process's only top-level
+  window hosting a Flutter view.
 * `windowManager.bindWindow(window)` addresses a given `nativeapi.Window` — for example
   `nativeapi.Window.createWithNativeWindow(hwnd)` — instead of the current one, moving
   listeners and prevent-close to it; `bindWindow(null)` goes back to the current window.
