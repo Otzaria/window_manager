@@ -12,13 +12,9 @@ class _IconChromeMinimizePainter extends CustomPainter {
 
   final Color color;
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    final path = Path()
+  // The 16×16 icon geometry does not depend on its color or paint size.
+  // Build the native Path once instead of on every hover/theme repaint.
+  static final Path _glyph = Path()
       ..moveTo(3.49805, 8)
       ..cubicTo(3.42969, 8, 3.36458, 7.98698, 3.30273, 7.96094)
       ..cubicTo(3.24414, 7.9349, 3.19206, 7.89909, 3.14648, 7.85352)
@@ -39,7 +35,13 @@ class _IconChromeMinimizePainter extends CustomPainter {
       ..cubicTo(12.6338, 7.98698, 12.5703, 8, 12.502, 8)
       ..close();
 
-    canvas.drawPath(path, paint);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    canvas.drawPath(_glyph, paint);
   }
 
   @override
@@ -54,13 +56,9 @@ class _IconChromeMaximizePainter extends CustomPainter {
 
   final Color color;
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    Path path = Path()
+  // The 16×16 icon geometry does not depend on its color or paint size.
+  // Build the native Path once instead of on every hover/theme repaint.
+  static final Path _glyph = Path()
       ..moveTo(4.47461, 13)
       ..cubicTo(4.2793, 13, 4.09212, 12.9609, 3.91309, 12.8828)
       ..cubicTo(3.73405, 12.8014, 3.57617, 12.694, 3.43945, 12.5605)
@@ -105,7 +103,13 @@ class _IconChromeMaximizePainter extends CustomPainter {
       ..lineTo(11.501, 11.999)
       ..close();
 
-    canvas.drawPath(path, paint);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    canvas.drawPath(_glyph, paint);
   }
 
   @override
@@ -120,13 +124,9 @@ class _IconChromeUnmaximizePainter extends CustomPainter {
 
   final Color color;
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    final path = Path()
+  // The 16×16 icon geometry does not depend on its color or paint size.
+  // Build the native Path once instead of on every hover/theme repaint.
+  static final Path _glyph = Path()
       ..moveTo(11.999, 5.96387)
       ..cubicTo(11.999, 5.69368, 11.9453, 5.43978, 11.8379, 5.20215)
       ..cubicTo(11.7305, 4.96126, 11.584, 4.75293, 11.3984, 4.57715)
@@ -194,7 +194,13 @@ class _IconChromeUnmaximizePainter extends CustomPainter {
       ..lineTo(9.49902, 11.999)
       ..close();
 
-    canvas.drawPath(path, paint);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    canvas.drawPath(_glyph, paint);
   }
 
   @override
@@ -209,13 +215,9 @@ class _IconChromeClosePainter extends CustomPainter {
 
   final Color color;
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    final path = Path()
+  // The 16×16 icon geometry does not depend on its color or paint size.
+  // Build the native Path once instead of on every hover/theme repaint.
+  static final Path _glyph = Path()
       ..moveTo(8, 8.70801)
       ..lineTo(3.85449, 12.8535)
       ..cubicTo(3.75684, 12.9512, 3.63965, 13, 3.50293, 13)
@@ -249,7 +251,13 @@ class _IconChromeClosePainter extends CustomPainter {
       ..lineTo(8, 8.70801)
       ..close();
 
-    canvas.drawPath(path, paint);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    canvas.drawPath(_glyph, paint);
   }
 
   @override
