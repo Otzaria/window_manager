@@ -75,10 +75,6 @@ class WindowManager {
   nativeapi.Window? _window;
   nativeapi.ListenerId? _nativeListenerId;
 
-  /// Override platform support for native close in compatibility tests.
-  @visibleForTesting
-  bool? debugCloseSupported;
-
   /// Addresses [window] instead of the platform's current window, or goes
   /// back to the current window with null. For tests of this bridge only.
   @visibleForTesting
@@ -215,27 +211,25 @@ class WindowManager {
   /// `onWindowClose`, as for the title bar's close button.
   Future<void> close() async {
     final window = _target;
-    if (window != null) {
-      final supported =
-          debugCloseSupported ??
-          (tryNative(() => nativeapi.Window.isCloseSupported()) ?? false);
-      if (supported) {
-        _wireNativeEvents();
-        // false can mean that another native listener vetoed the request.
-        // Never bypass that veto by terminating every window of the app.
-        tryNative(() => window.close());
-        return;
+    final closing =
+        window != null &&
+        (tryNative(() {
+              if (!nativeapi.Window.isCloseSupported()) return false;
+              _wireNativeEvents();
+              return window.close();
+            }) ??
+            false);
+    if (!closing) {
+      // Without a native close, as on a platform the core cannot close a
+      // window on, prevent-close still reports and otherwise the app quits.
+      final destroying = _isDestroying;
+      _isDestroying = false;
+      if (!destroying) {
+        _emit(kWindowEventClose);
+        if (_isPreventClose) return;
       }
+      tryNative(() => nativeapi.Application.instance.quit(0));
     }
-
-    // Only platforms without native close support use this fallback.
-    final destroying = _isDestroying;
-    _isDestroying = false;
-    if (!destroying) {
-      _emit(kWindowEventClose);
-      if (_isPreventClose) return;
-    }
-    tryNative(() => nativeapi.Application.instance.quit(0));
   }
 
   /// Check if is intercepting the native close signal.

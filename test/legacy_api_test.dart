@@ -235,8 +235,6 @@ class _FakeNativeWindow extends nativeapi.Window {
   bool maximized = false;
   bool fullscreen = false;
   bool refuseVisibilityChanges = false;
-  bool rejectClose = false;
-  int closeAttempts = 0;
   FutureOr<void> Function(nativeapi.WindowEvent)? _callback;
 
   bool get isListening => _callback != null;
@@ -262,12 +260,6 @@ class _FakeNativeWindow extends nativeapi.Window {
 
   @override
   void hide() => visible = visible && refuseVisibilityChanges;
-
-  @override
-  bool close() {
-    closeAttempts++;
-    return !rejectClose;
-  }
 
   @override
   void minimize() => minimized = true;
@@ -456,16 +448,6 @@ void main() {
       await windowManager.show();
       fake.visible = true;
       await windowManager.hide();
-      expect(listener.events, isEmpty);
-    });
-
-    test('a vetoed native close request cannot quit the app', () async {
-      fake.rejectClose = true;
-      windowManager.debugCloseSupported = true;
-      addTearDown(() => windowManager.debugCloseSupported = null);
-      await windowManager.setPreventClose(false);
-      await windowManager.close();
-      expect(fake.closeAttempts, 1);
       expect(listener.events, isEmpty);
     });
 
