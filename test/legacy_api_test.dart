@@ -235,6 +235,35 @@ class _FakeNativeWindow extends nativeapi.Window {
   bool maximized = false;
   bool fullscreen = false;
   bool refuseVisibilityChanges = false;
+
+  int boundsReads = 0;
+  nativeapi.Rectangle currentBounds = const nativeapi.Rectangle(
+    x: 1,
+    y: 2,
+    width: 300,
+    height: 200,
+  );
+
+  @override
+  nativeapi.Rectangle get bounds {
+    boundsReads++;
+    return currentBounds;
+  }
+
+  @override
+  set bounds(nativeapi.Rectangle value) {
+    currentBounds = value;
+  }
+
+  // Simulates a platform without native bounds animation (Windows/Linux).
+  final List<nativeapi.Rectangle> animateRequests = [];
+
+  @override
+  bool animateBounds(nativeapi.Rectangle bounds) {
+    animateRequests.add(bounds);
+    return false;
+  }
+
   FutureOr<void> Function(nativeapi.WindowEvent)? _callback;
 
   bool get isListening => _callback != null;
@@ -327,6 +356,63 @@ class _FakeApplication implements nativeapi.Application {
 }
 
 void main() {
+  test('full bounds updates skip the native geometry read', () async {
+    final native = _FakeNativeWindow();
+    windowManager.debugBindWindow(native);
+    addTearDown(() => windowManager.debugBindWindow(null));
+
+    await windowManager.setBounds(const Rect.fromLTWH(40, 70, 800, 600));
+    expect(native.boundsReads, 0);
+    expect(
+      native.currentBounds,
+      const nativeapi.Rectangle(x: 40, y: 70, width: 800, height: 600),
+    );
+
+    // Partial updates still read the omitted dimensions from the window.
+    await windowManager.setBounds(null, position: const Offset(25, 35));
+    expect(native.boundsReads, 1);
+    expect(
+      native.currentBounds,
+      const nativeapi.Rectangle(x: 25, y: 35, width: 800, height: 600),
+    );
+
+    await windowManager.setBounds(null, size: const Size(640, 480));
+    expect(native.boundsReads, 2);
+    expect(
+      native.currentBounds,
+      const nativeapi.Rectangle(x: 25, y: 35, width: 640, height: 480),
+    );
+
+    // Full bounds win over position/size, as in 0.5.x.
+    await windowManager.setBounds(
+      const Rect.fromLTWH(5, 6, 700, 500),
+      position: const Offset(99, 99),
+      size: const Size(1, 1),
+    );
+    expect(native.boundsReads, 2);
+    expect(
+      native.currentBounds,
+      const nativeapi.Rectangle(x: 5, y: 6, width: 700, height: 500),
+    );
+
+    // Animation is tried first and falls back to a plain set when refused.
+    await windowManager.setBounds(
+      const Rect.fromLTWH(10, 20, 900, 650),
+      animate: true,
+    );
+    expect(native.boundsReads, 2);
+    expect(native.animateRequests, [
+      const nativeapi.Rectangle(x: 10, y: 20, width: 900, height: 650),
+    ]);
+    expect(
+      native.currentBounds,
+      const nativeapi.Rectangle(x: 10, y: 20, width: 900, height: 650),
+    );
+
+    await windowManager.setBounds(null);
+    expect(native.boundsReads, 2, reason: 'empty request is a no-op');
+  });
+
   test('event names are still exported', () {
     expect(
       [
