@@ -83,13 +83,14 @@ class _VirtualWindowFrameState extends State<VirtualWindowFrame> {
     );
   }
 
+  // Resize alone does not change the frame flags; skip per-pixel FFI state
+  // reads while the user interactively resizes a native window.
   void _onWindowEvent(nativeapi.WindowEvent event) {
     switch (event) {
       case nativeapi.WindowFocusedEvent():
       case nativeapi.WindowBlurredEvent():
       case nativeapi.WindowMaximizedEvent():
       case nativeapi.WindowRestoredEvent():
-      case nativeapi.WindowResizedEvent():
       case nativeapi.WindowEnteredFullScreenEvent():
       case nativeapi.WindowExitedFullScreenEvent():
         _readState();
