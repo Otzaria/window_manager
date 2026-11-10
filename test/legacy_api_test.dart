@@ -6,10 +6,12 @@
 // ignore_for_file: unused_local_variable, unused_element, deprecated_member_use
 // ignore_for_file: deprecated_member_use_from_same_package
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nativeapi/nativeapi.dart' as nativeapi;
 import 'package:window_manager/legacy.dart';
 
 class _Mixed with WindowListener {}
@@ -198,6 +200,92 @@ Future<void> _surface() async {
   const double captionHeight = kWindowCaptionHeight;
 }
 
+class _RunOnClose with WindowListener {
+  _RunOnClose(this.action);
+
+  final void Function() action;
+
+  @override
+  void onWindowEvent(String eventName) {
+    if (eventName == kWindowEventClose) action();
+  }
+}
+
+class _Typed with WindowListener {
+  final List<String> calls = <String>[];
+
+  @override
+  void onWindowFocus() => calls.add('focus');
+
+  @override
+  void onWindowBlur() => calls.add('blur');
+
+  @override
+  void onWindowMaximize() => calls.add('maximize');
+
+  @override
+  void onWindowUnmaximize() => calls.add('unmaximize');
+}
+
+class _FakeNativeWindow extends nativeapi.Window {
+  _FakeNativeWindow() : super.borrowed(0);
+
+  bool visible = false;
+  bool minimized = false;
+  bool maximized = false;
+  bool fullscreen = false;
+  bool refuseVisibilityChanges = false;
+  FutureOr<void> Function(nativeapi.WindowEvent)? _callback;
+
+  bool get isListening => _callback != null;
+
+  // As nativeapi on macOS, a minimized window does not count as visible.
+  @override
+  bool get isVisible => visible && !minimized;
+
+  @override
+  bool get isMinimized => minimized;
+
+  @override
+  bool get isMaximized => maximized;
+
+  @override
+  bool get isFullScreen => fullscreen;
+
+  @override
+  void show() => visible = visible || !refuseVisibilityChanges;
+
+  @override
+  void showInactive() => show();
+
+  @override
+  void hide() => visible = visible && refuseVisibilityChanges;
+
+  @override
+  void minimize() => minimized = true;
+
+  @override
+  void restore() => minimized = false;
+
+  @override
+  nativeapi.ListenerId addListener(
+    FutureOr<void> Function(nativeapi.WindowEvent) listener,
+  ) {
+    _callback = listener;
+    return 1;
+  }
+
+  @override
+  bool removeListener(nativeapi.ListenerId id) {
+    _callback = null;
+    return true;
+  }
+
+  Future<void> fire(nativeapi.WindowEvent event) async {
+    await _callback?.call(event);
+  }
+}
+
 void main() {
   test('event names are still exported', () {
     expect(
@@ -255,6 +343,30 @@ void main() {
     expect(await windowManager.isPreventClose(), isFalse);
   });
 
+  test(
+    'removing a listener during delivery does not starve later listeners',
+    () async {
+      final events = <String>[];
+      late final _RunOnClose removed;
+      final first = _RunOnClose(() => windowManager.removeListener(removed));
+      removed = _RunOnClose(() => events.add('removed'));
+      final last = _RunOnClose(() => events.add('last'));
+      windowManager.addListener(first);
+      windowManager.addListener(removed);
+      windowManager.addListener(last);
+      addTearDown(() {
+        windowManager.removeListener(first);
+        windowManager.removeListener(removed);
+        windowManager.removeListener(last);
+      });
+
+      await windowManager.setPreventClose(true);
+      addTearDown(() => windowManager.setPreventClose(false));
+      await windowManager.close();
+      expect(events, ['last']);
+    },
+  );
+
   test('listeners are tracked without touching the window', () {
     final listener = _Implemented();
     expect(windowManager.hasListeners, isFalse);
@@ -263,6 +375,117 @@ void main() {
     expect(windowManager.listeners, [listener]);
     windowManager.removeListener(listener);
     expect(windowManager.hasListeners, isFalse);
+  });
+
+  group('nativeapi bridge', () {
+    late _FakeNativeWindow fake;
+    late _Implemented listener;
+
+    setUp(() {
+      fake = _FakeNativeWindow();
+      listener = _Implemented();
+      windowManager.debugBindWindow(fake);
+      windowManager.addListener(listener);
+    });
+
+    tearDown(() {
+      windowManager.removeListener(listener);
+      windowManager.debugBindWindow(null);
+    });
+
+    test('reports show and hide only when visibility changes', () async {
+      await windowManager.show();
+      await windowManager.show();
+      await windowManager.hide();
+      await windowManager.hide();
+      await windowManager.show(inactive: true);
+      expect(listener.events, ['show', 'hide', 'show']);
+    });
+
+    test('a minimized window counts as shown', () async {
+      fake.visible = true;
+      fake.minimized = true;
+      await windowManager.hide();
+      expect(listener.events, ['hide']);
+
+      fake.visible = true;
+      fake.minimized = true;
+      await windowManager.show();
+      expect(fake.minimized, isFalse);
+      expect(listener.events, ['hide', 'show']);
+    });
+
+    test('no show or hide when the platform keeps the visibility', () async {
+      fake.refuseVisibilityChanges = true;
+      await windowManager.show();
+      fake.visible = true;
+      await windowManager.hide();
+      expect(listener.events, isEmpty);
+    });
+
+    test('the last listener going away unwires the window', () {
+      expect(fake.isListening, isTrue);
+      windowManager.removeListener(listener);
+      expect(fake.isListening, isFalse);
+      windowManager.addListener(listener);
+      expect(fake.isListening, isTrue);
+    });
+
+    test('a minimized maximized window coming back is not minimized', () async {
+      fake.minimized = true;
+      await fake.fire(const nativeapi.WindowMinimizedEvent(windowId: 1));
+      fake.minimized = false;
+      fake.maximized = true;
+      await fake.fire(const nativeapi.WindowMaximizedEvent(windowId: 1));
+      fake.maximized = false;
+      await fake.fire(const nativeapi.WindowRestoredEvent(windowId: 1));
+
+      expect(listener.events, [
+        kWindowEventMinimize,
+        kWindowEventMaximize,
+        kWindowEventUnmaximize,
+      ]);
+    });
+
+    test('restoring a minimized window keeps it maximized', () async {
+      fake.maximized = true;
+      await fake.fire(const nativeapi.WindowMaximizedEvent(windowId: 1));
+      fake.minimized = true;
+      await fake.fire(const nativeapi.WindowMinimizedEvent(windowId: 1));
+      fake.minimized = false;
+      await fake.fire(const nativeapi.WindowRestoredEvent(windowId: 1));
+      fake.maximized = false;
+      await fake.fire(const nativeapi.WindowRestoredEvent(windowId: 1));
+
+      expect(listener.events, [
+        kWindowEventMaximize,
+        kWindowEventMinimize,
+        kWindowEventRestore,
+        kWindowEventUnmaximize,
+      ]);
+    });
+
+    test('named callbacks follow onWindowEvent', () async {
+      final typed = _Typed();
+      windowManager.addListener(typed);
+      addTearDown(() => windowManager.removeListener(typed));
+
+      await fake.fire(const nativeapi.WindowFocusedEvent(windowId: 1));
+      await fake.fire(const nativeapi.WindowBlurredEvent(windowId: 1));
+      fake.maximized = true;
+      await fake.fire(const nativeapi.WindowMaximizedEvent(windowId: 1));
+      fake.maximized = false;
+      await fake.fire(const nativeapi.WindowRestoredEvent(windowId: 1));
+      await windowManager.show();
+
+      expect(typed.calls, ['focus', 'blur', 'maximize', 'unmaximize']);
+    });
+
+    test('events without a 0.5.x counterpart are dropped', () async {
+      await fake.fire(const nativeapi.WindowCreatedEvent(windowId: 1));
+      await fake.fire(const nativeapi.WindowClosedEvent(windowId: 1));
+      expect(listener.events, isEmpty);
+    });
   });
 
   test('what the platform cannot do answers instead of throwing', () async {
