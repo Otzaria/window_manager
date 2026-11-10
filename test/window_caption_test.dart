@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nativeapi/nativeapi.dart' as nativeapi;
 import 'package:window_manager/window_manager.dart';
 
 // Only the widgets' window state is needed; no native window is created.
@@ -209,6 +210,14 @@ void main() {
     await a.emit(const WindowBlurredEvent(windowId: 1));
     await a.emit(const WindowFocusedEvent(windowId: 1));
     expect(a.stateReads, 3, reason: 'only its initial read');
+    expect(b.stateReads, readsOfB);
+
+    // A live resize can emit hundreds of events per second. None changes
+    // focus, fullscreen or maximize and should query the OS again.
+    await b.emit(const WindowResizedEvent(
+      windowId: 2,
+      newSize: nativeapi.Size(width: 800, height: 600),
+    ));
     expect(b.stateReads, readsOfB);
 
     await b.emit(const WindowMaximizedEvent(windowId: 2));
