@@ -215,4 +215,36 @@ void main() {
     );
     handle.dispose();
   });
+
+  testWidgets('hovered and pressed show the state without a pointer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(WindowCaptionButton.maximize(onPressed: () {}, hovered: true)),
+    );
+    expect(_background(tester), Colors.black.withValues(alpha: 0.0373));
+
+    await tester.pumpWidget(
+      _host(
+        WindowCaptionButton.maximize(
+          onPressed: () {},
+          hovered: true,
+          pressed: true,
+        ),
+      ),
+    );
+    expect(_background(tester), Colors.black.withValues(alpha: 0.0241));
+
+    await tester.pumpWidget(
+      _host(WindowCaptionButton.maximize(onPressed: () {})),
+    );
+    expect(_background(tester), Colors.transparent);
+  });
+
+  testWidgets('a disabled button ignores external hover', (tester) async {
+    await tester.pumpWidget(
+      _host(WindowCaptionButton.maximize(onPressed: null, hovered: true)),
+    );
+    expect(_background(tester), Colors.transparent);
+  });
 }
